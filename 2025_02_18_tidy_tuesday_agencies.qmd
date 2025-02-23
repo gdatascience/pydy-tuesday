@@ -1,115 +1,112 @@
 ---
-title: "Tidy Tuesday Agencies"
-format: html
+title: "Agencies from the FBI Crime Data API"
+format: 
+  dashboard:
+    orientation: rows
 ---
 
 ```{python}
+#| label: setup
+#| include: false
 import pandas as pd
-
-agencies = pd.read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-02-18/agencies.csv')
-
-# Print the first 5 rows of the dataframe to verify.
-print(agencies.head())
-
-```
-
-```{python}
-
 import matplotlib.pyplot as plt
 import seaborn as sns
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import numpy as np
+from matplotlib.colors import ListedColormap
+from matplotlib.lines import Line2D
 
-# Group by 'state' and count the occurrences
-state_counts = agencies.groupby('state').size().reset_index(name='n')
+# Load data
+agencies = pd.read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-02-18/agencies.csv')
 
-# Sort states by count in descending order
-state_counts = state_counts.sort_values('n', ascending=False)
-
-# Create the plot using seaborn
-plt.figure(figsize=(10, 6))  # Adjust figure size as needed
-sns.barplot(x='n', y='state', data=state_counts, orient='h')
-plt.xlabel('Count')
-plt.ylabel('State')
-plt.title('Agency Count by State')
-plt.show()
-
-```
-
-
-```{python}
-
-# Convert nibrs_start_date to datetime objects
+# Preprocess datetime
 agencies['nibrs_start_date'] = pd.to_datetime(agencies['nibrs_start_date'])
+agencies['year'] = agencies['nibrs_start_date'].dt.to_period('Y')
+``` 
 
-# Floor the date to the year
-agencies['date'] = agencies['nibrs_start_date'].dt.to_period('Y')
+```{python}
+#| label: state-barplot
 
-# Count the occurrences of each year
-agency_counts = agencies.groupby('date').size().reset_index(name='n')
+# Count occurrences
+df_counts = agencies.groupby(['state', 'is_nibrs']).size().reset_index(name='n')
 
-# Convert the 'date' column back to datetime for plotting
-agency_counts['date'] = agency_counts['date'].dt.to_timestamp()
+# Compute total counts per state for ordering (descending order)
+state_order = df_counts.groupby('state')['n'].sum().sort_values(ascending=False).index
 
+# Convert state to ordered categorical for proper sorting
+df_counts['state'] = pd.Categorical(df_counts['state'], categories=state_order, ordered=True)
 
-# Create the line plot using matplotlib
+# Plot
 plt.figure(figsize=(10, 6))
-plt.plot(agency_counts['date'], agency_counts['n'])
-plt.xlabel('Year')
-plt.ylabel('Count')
-plt.title('Agency Count Over Time')
-plt.xticks(rotation=45)  # Rotate x-axis labels for better readability
-plt.tight_layout()  # Adjust layout to prevent labels from overlapping
+sns.barplot(
+    data=df_counts, 
+    x='n', 
+    y='state',  # Now properly ordered in descending order
+    hue='is_nibrs', 
+    dodge=False
+)
+
+_ = plt.xlabel("Count")
+_ = plt.ylabel("State")
+_ = plt.title("Agencies Count by State and NIBRS Status")
+
+plt.show()
+
+``` 
+
+```{python}
+#| label: nibrs-map
+
+df_filtered = agencies.dropna(subset=['longitude', 'latitude'])
+
+# Define seaborn color palette for consistency
+palette = sns.color_palette("pastel")  # Matches seaborn defaults
+
+# Assign colors to is_nibrs values
+nibrs_colors = dict(zip(df_filtered['is_nibrs'].unique(), palette[:2]))
+
+# Map colors
+df_filtered['color'] = df_filtered['is_nibrs'].map(nibrs_colors)
+
+# Plot
+plt.figure(figsize=(12, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+
+# Add geographic features
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+ax.add_feature(cfeature.COASTLINE)
+ax.add_feature(cfeature.BORDERS, linestyle=':')
+ax.add_feature(cfeature.STATES, linestyle='--')
+
+# Scatter plot with mapped colors
+ax.scatter(df_filtered['longitude'], 
+           df_filtered['latitude'], 
+           color=df_filtered['color'], 
+           s=50, 
+           alpha=0.6, 
+           transform=ccrs.PlateCarree())
+
+# Custom legend
+legend_elements = [Line2D([0], [0], marker='o', color='w', label=key, 
+                          markersize=8, markerfacecolor=color) 
+                   for key, color in nibrs_colors.items()]
+ax.legend(handles=legend_elements, loc='lower left')
+
+# **Set extent AFTER adding features to keep zoom on the US**
+ax.set_extent([-125, -66.5, 24, 50], crs=ccrs.PlateCarree())
+
+# Labels & Title
+_ = plt.title('Agencies by NIBRS Status Across the USA')
+_ = ax.set_xlabel('Longitude')
+_ = ax.set_ylabel('Latitude')
+
+plt.tight_layout()
 plt.show()
 
 ```
 
-
-```{python}
-
-import plotly.express as px
-
-# Filter out rows with missing longitude or latitude
-df_filtered = agencies.dropna(subset=['longitude', 'latitude'])
-
-# Create the map using plotly express
-fig = px.scatter_mapbox(df_filtered, 
-                        lat="latitude", 
-                        lon="longitude", 
-                        color="is_nibrs",
-                        hover_name="agency_name",  # Add agency name to hover info
-                        zoom=3,  # Initial zoom level
-                        mapbox_style="open-street-map") # Use a different map style
-
-
-fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}) # Adjust layout for better display
-fig.show()
-
-```
-
-
-```{python}
-
-# Convert nibrs_start_date to datetime objects if not already done
-# df['nibrs_start_date'] = pd.to_datetime(df['nibrs_start_date'])
-
-# Floor the date to the year
-agencies['year'] = agencies['nibrs_start_date'].dt.to_period('Y')
-
-# Now filter out rows with missing longitude or latitude
-df_filtered = agencies.dropna(subset=['longitude', 'latitude'])
-
-
-# Create the animated map
-fig = px.scatter_mapbox(df_filtered, 
-                        lat="latitude", 
-                        lon="longitude", 
-                        color="is_nibrs",
-                        hover_name="agency_name",
-                        animation_frame="year", # Animate by year
-                        animation_group="agency_name", # Group points by agency
-                        zoom=3,
-                        mapbox_style="open-street-map")
-
-fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
-fig.show()
-
-```
+::: {.callout-note}
+Source: FBI Crime Data API  |  Analysis By: Tony Galvan (@GDataScience1)  |  #TidyTuesday
+:::
